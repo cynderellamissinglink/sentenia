@@ -536,11 +536,17 @@ def scan_network_devices(ip, timeout=1):
         except Exception:
             pass
 
-    threads = [threading.Thread(target=probe, args=(h,), daemon=True) for h in hosts]
+    sem = threading.Semaphore(32)
+
+    def probe_limited(host_ip):
+        with sem:
+            probe(host_ip)
+
+    threads = [threading.Thread(target=probe_limited, args=(h,), daemon=True) for h in hosts]
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=3)
+        t.join(timeout=5)
 
     results.sort(key=lambda x: [int(p) for p in x["ip"].split(".")])
     return results
@@ -1398,6 +1404,31 @@ class MiscSidebar(tk.Frame):
 # ── Host Card ────────────────────────────────────────────────────
 class HostCard(tk.Frame):
 
+    def _graph_layout(self, W, H, data):
+        """Shared layout constants for all graph draw methods."""
+        valid = [v for v in data if v is not None]
+        max_ms = max(valid) if valid else 1
+        min_ms = min(valid) if valid else 0
+        STATS_H = 18
+        pad_top = 10
+        pad_bot = 32
+        pad_l = 44 if W >= 500 else 30 if W >= 300 else 20
+        pad_r = 10 if W >= 500 else 8 if W >= 300 else 5
+        graph_h = max(30, H - pad_top - pad_bot - STATS_H)
+        graph_w = max(50, W - pad_l - pad_r)
+        floor_y = pad_top + graph_h
+        n = len(data)
+
+        def x_of(i):
+            return pad_l if n <= 1 else pad_l + (i / max(1, n - 1)) * graph_w
+
+        def y_of(v):
+            if max_ms == min_ms:
+                return pad_top + graph_h * 0.5
+            return pad_top + (1 - (v - min_ms) / max(1, max_ms - min_ms)) * graph_h
+
+        return valid, max_ms, min_ms, STATS_H, pad_top, pad_l, pad_r, graph_h, graph_w, floor_y, x_of, y_of
+
     def _animate_graph_drawIn(self):
         """Animate dots appearing one by one on first show."""
         if not self._graph_showing:
@@ -1441,29 +1472,8 @@ class HostCard(tk.Frame):
         if n < 2:
             return
 
-        valid = [v for v in full_data if v is not None]
-        max_ms = max(valid) if valid else 1
-        min_ms = min(valid) if valid else 0
-
-        STATS_H = 18
-        pad_top = 10
-        pad_bot = 32
-        pad_l = 44 if W >= 500 else 30 if W >= 300 else 20
-        pad_r = 10 if W >= 500 else 8 if W >= 300 else 5
-        graph_h = max(30, H - pad_top - pad_bot - STATS_H)
-        graph_w = max(50, W - pad_l - pad_r)
-
-        def x_of(i):
-            if n <= 1:
-                return pad_l
-            return pad_l + (i / max(1, n - 1)) * graph_w
-
-        def y_of(v):
-            if max_ms == min_ms:
-                return pad_top + graph_h * 0.5
-            return pad_top + (1 - (v - min_ms) / max(1, max_ms - min_ms)) * graph_h
-
-        floor_y = pad_top + graph_h
+        valid, max_ms, min_ms, STATS_H, pad_top, pad_l, pad_r, graph_h, graph_w, floor_y, x_of, y_of = \
+            self._graph_layout(W, H, full_data)
 
         # ── Grid lines + Y labels ──
         if W > 200:
@@ -1619,28 +1629,8 @@ class HostCard(tk.Frame):
         if W < 100 or H < 100:
             return
 
-        n = len(data)
-        valid = [v for v in data if v is not None]
-        max_ms = max(valid) if valid else 1
-        min_ms = min(valid) if valid else 0
-
-        STATS_H = 18
-        pad_top = 10
-        pad_bot = 32
-        pad_l = 44 if W >= 500 else 30 if W >= 300 else 20
-        pad_r = 10 if W >= 500 else 8 if W >= 300 else 5
-        graph_h = max(30, H - pad_top - pad_bot - STATS_H)
-        graph_w = max(50, W - pad_l - pad_r)
-
-        def x_of(i):
-            if n <= 1:
-                return pad_l
-            return pad_l + (i / max(1, n - 1)) * graph_w
-
-        def y_of(v):
-            if max_ms == min_ms:
-                return pad_top + graph_h * 0.5
-            return pad_top + (1 - (v - min_ms) / max(1, max_ms - min_ms)) * graph_h
+        valid, max_ms, min_ms, STATS_H, pad_top, pad_l, pad_r, graph_h, graph_w, floor_y, x_of, y_of = \
+            self._graph_layout(W, H, data)
 
         px = x_of(last_idx)
         py = y_of(last_val)
@@ -3264,7 +3254,7 @@ class HostCard(tk.Frame):
             for i in range(PING_COUNT):
                 self._latency_history.append(ms_val if (i < recv and ms_val is not None) else None)
             # Keep last 60 data points
-            self._latency_history = self._latency_history[-60:]
+            self._latency_history = self._latency_history[-50:]
             has_valid = any(v is not None for v in self._latency_history)
             if not self._graph_showing and not self._webview_showing and len(self._latency_history) >= PING_COUNT and has_valid:
                 self.after(15000, self._show_latency_graph)
@@ -5090,15 +5080,23 @@ class PingApp(tk.Tk):
     def _start_blink_clock(self):
         def fast_tick():
             self._blink_fast_state = not self._blink_fast_state
+            dead = []
             for cb in list(self._blink_fast_subs):
                 try: cb(self._blink_fast_state)
-                except Exception: pass
+                except Exception: dead.append(cb)
+            for cb in dead:
+                try: self._blink_fast_subs.remove(cb)
+                except ValueError: pass
             self.after(BLINK_FAST, fast_tick)
         def mild_tick():
             self._blink_mild_state = not self._blink_mild_state
+            dead = []
             for cb in list(self._blink_mild_subs):
                 try: cb(self._blink_mild_state)
-                except Exception: pass
+                except Exception: dead.append(cb)
+            for cb in dead:
+                try: self._blink_mild_subs.remove(cb)
+                except ValueError: pass
             self.after(BLINK_MILD, mild_tick)
         self.after(BLINK_FAST, fast_tick)
         self.after(BLINK_MILD, mild_tick)
