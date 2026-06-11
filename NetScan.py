@@ -312,14 +312,15 @@ def ping_host(ip, count, dot_callback=None):
     def ping_one(idx):
         try:
             proc = subprocess.Popen(
-                ["ping", flag, "1", "-w", "200", ip],
+                ["ping", flag, "1", "-W", "1" if not IS_WIN else "-w", "1000", ip] if not IS_WIN else ["ping", flag, "1", "-w", "1000", ip],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, **kw
             )
             out, _ = proc.communicate(timeout=3)
             lo = out.lower()
             success = ("reply from" in lo or "bytes from" in lo or
-                       "icmp_seq" in lo or "seq=" in lo)
+                        "icmp_seq" in lo or "seq=" in lo or
+                        "time=" in lo or "time<" in lo or "ttl=" in lo)
             with lock:
                 results[idx] = (success, out)
             if dot_callback:
@@ -436,7 +437,7 @@ def check_http(host, port=80, endpoint="", timeout=3):
         url = f"{scheme}://{host}:{port_num}{endpoint_path}"
         try:
             start = datetime.datetime.now()
-            response = requests.get(url, timeout=timeout, verify=True) 
+            response = requests.get(url, timeout=timeout, verify=False)
             elapsed = (datetime.datetime.now() - start).total_seconds() * 1000
             status_code = response.status_code
 
@@ -2981,7 +2982,7 @@ class HostCard(tk.Frame):
                 http_lock = threading.Lock()
 
                 def http_one(idx):
-                    result = check_http(target, active_port, ep)
+                    result = check_http(target, active_port, ep, timeout=10)
                     with http_lock:
                         http_results[idx] = result
                     is_ok = result.get("status") == "OK" or "200" in str(result.get("status_code", ""))
@@ -2992,7 +2993,7 @@ class HostCard(tk.Frame):
                 for t in http_threads:
                     t.start()
                 for t in http_threads:
-                    t.join(timeout=5)
+                    t.join(timeout=15)
 
                 for idx, result in enumerate(http_results):
                     if not result:
@@ -5178,25 +5179,7 @@ class PingApp(tk.Tk):
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", self._on_search)
 
-        # Inside right_hdr, before search_inner
-        console_wrap = tk.Frame(right_hdr, bg=CARD_BG, padx=1, pady=1)
-        console_wrap.pack(side="left", padx=(0, 4))
-        console_btn = tk.Button(
-            console_wrap,
-            text="</>",                     # short for Console
-            font=("Consolas", 9),
-            fg=TEXT,
-            bg=CARD_BG,
-            activeforeground=CARD_BG,
-            activebackground=CARD_BG,
-            relief="flat",
-            bd=0,
-            padx=10,
-            pady=4,
-            cursor="hand2",
-            command=self._open_console_modal
-        )
-        console_btn.pack()
+        
 
         search_inner = tk.Frame(right_hdr, bg=CARD_BG,
                                 highlightbackground=BORDER, highlightthickness=0)
@@ -5240,23 +5223,23 @@ class PingApp(tk.Tk):
                 command=self._toggle_settings).pack(side="left", padx=(0, 4))
         
 
-        logs_wrap = tk.Frame(right_hdr, bg=TEXT, padx=1, pady=1)
-        logs_wrap.pack(side="left", padx=(0, 4))
+        logs_wrap = tk.Frame(right_hdr, bg=TEXT, padx=2, pady=4)
+        logs_wrap.pack(side="left", padx=(0, 10))
         logs_btn = tk.Button(logs_wrap, text="LOGS",
-                        font=("Consolas", 9), fg=TEXT, bg=CARD_BG,
+                        font=("Consolas", 9, "bold"), fg=TEXT, bg=CARD_BG,
                         activeforeground=TEXT, activebackground=ACCENT_DIM,
-                        relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
+                        relief="flat", bd=0, padx=18, pady=6, cursor="hand2",
                         command=self._open_log_modal)
         logs_btn.pack()
 
         # ADD HOST button with hover effect
         # ADD HOST — real cyan border via wrapper frame
-        add_host_wrap = tk.Frame(right_hdr, bg=TEXT, padx=1, pady=1)
-        add_host_wrap.pack(side="left", padx=(0, 4))
+        add_host_wrap = tk.Frame(right_hdr, bg=TEXT, padx=2, pady=4)
+        add_host_wrap.pack(side="left", padx=(0, 10))
         add_host_btn = tk.Button(add_host_wrap, text="+ HOST",
                   font=("Consolas", 9), fg=TEXT, bg=CARD_BG,
                   activeforeground=TEXT, activebackground=ACCENT_DIM,
-                  relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
+                  relief="flat", bd=0, padx=18, pady=6, cursor="hand2",
                   command=self._toggle_add_host)
         add_host_btn.pack()
 
@@ -5267,13 +5250,26 @@ class PingApp(tk.Tk):
         add_host_btn.bind("<Enter>", add_host_enter)
         add_host_btn.bind("<Leave>", add_host_leave)
 
+        
+        console_wrap = tk.Frame(right_hdr, bg=TEXT, padx=2, pady=4)
+        console_wrap.pack(side="left", padx=(0, 10))
+        console_btn = tk.Button(
+            console_wrap,
+            text="</>",
+            font=("Consolas", 9), fg=TEXT, bg=CARD_BG,
+            activeforeground=TEXT, activebackground=ACCENT_DIM,
+            relief="flat", bd=0, padx=20, pady=6, cursor="hand2",
+            command=self._open_console_modal
+        )
+        console_btn.pack()
+
         # + BIO — real cyan border via wrapper frame
-        bio_wrap = tk.Frame(right_hdr, bg=TEXT, padx=1, pady=1)
-        bio_wrap.pack(side="left", padx=(0, 8))
+        bio_wrap = tk.Frame(right_hdr, bg=TEXT, padx=2, pady=4)
+        bio_wrap.pack(side="left", padx=(0, 10))
         bio_btn = tk.Button(bio_wrap, text="+ BIO",
                   font=("Consolas", 9), fg=TEXT, bg=CARD_BG,
                   activeforeground=TEXT, activebackground=ACCENT_DIM,
-                  relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
+                  relief="flat", bd=0, padx=18, pady=6, cursor="hand2",
                   command=lambda: self.misc._open_add_misc_modal())
         bio_btn.pack()
 
@@ -5286,14 +5282,14 @@ class PingApp(tk.Tk):
 
         # PING ALL — real cyan border via wrapper frame
         # PING ALL — real cyan border via wrapper frame
-        self.ping_all_wrap = tk.Frame(right_hdr, bg=TEXT, padx=1, pady=1)
-        self.ping_all_wrap.pack(side="left")
+        self.ping_all_wrap = tk.Frame(right_hdr, bg=TEXT, padx=2, pady=4)
+        self.ping_all_wrap.pack(side="left", padx=(0, 10))
         self.ping_all_btn = tk.Button(
             self.ping_all_wrap,
             text="SCAN ALL",
             font=("Consolas", 9), fg=TEXT, bg=CARD_BG,
             activeforeground=TEXT, activebackground=ACCENT_DIM,
-            relief="flat", bd=0, padx=14, pady=4, cursor="hand2",
+            relief="flat", bd=0, padx=20, pady=6, cursor="hand2",
             command=self._ping_all,
         )
         self.ping_all_btn.pack()
